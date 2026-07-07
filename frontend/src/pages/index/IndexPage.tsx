@@ -149,7 +149,7 @@ export default function IndexPage() {
   }
 
   function openTelegram() {
-    window.open('https://t.me/KimaruBs', '_blank', 'noopener,noreferrer');
+    window.open('https://t.me/KimaruEdits', '_blank', 'noopener,noreferrer');
   }
 
   async function openConfig() {
