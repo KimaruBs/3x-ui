@@ -35,7 +35,7 @@ import {
   ForkOutlined,
   CopyOutlined,
   TelegramFilled,
-  RobotOutlined,
+  RobotOutlined, // Добавил иконку робота для бота
 } from '@ant-design/icons';
 
 import { HttpUtil, SizeFormatter, TimeFormatter, ClipboardManager, FileManager } from '@/utils';
@@ -50,10 +50,8 @@ import { setMessageInstance } from '@/utils/messageBus';
 import StatusCard from './StatusCard';
 import XrayStatusCard from './XrayStatusCard';
 import type { PanelUpdateInfo } from './PanelUpdateModal';
-import type { BotUpdateInfo } from './BotUpdateModal';
 const JsonEditor = lazy(() => import('@/components/form/JsonEditor'));
 const PanelUpdateModal = lazy(() => import('./PanelUpdateModal'));
-const BotUpdateModal = lazy(() => import('./BotUpdateModal'));
 const LogModal = lazy(() => import('./LogModal'));
 const BackupModal = lazy(() => import('./BackupModal'));
 const SystemHistoryModal = lazy(() => import('./SystemHistoryModal'));
@@ -61,13 +59,6 @@ const XrayMetricsModal = lazy(() => import('./XrayMetricsModal'));
 const XrayLogModal = lazy(() => import('./XrayLogModal'));
 const VersionModal = lazy(() => import('./VersionModal'));
 import './IndexPage.css';
-
-const EMPTY_BOT_INFO: BotUpdateInfo = {
-  installed: false,
-  currentVersion: '',
-  latestVersion: '',
-  updateAvailable: false,
-};
 
 export default function IndexPage() {
   const { t } = useTranslation();
@@ -84,7 +75,14 @@ export default function IndexPage() {
     latestVersion: '',
     updateAvailable: false,
   });
-  const [botUpdateInfo, setBotUpdateInfo] = useState<BotUpdateInfo>(EMPTY_BOT_INFO);
+
+  // Заглушка для Xray Bot (потом привяжешь к бэкенду здесь)
+  const [botUpdateInfo, setBotUpdateInfo] = useState({
+    currentVersion: '1.0.0',
+    latestVersion: '1.1.0',
+    updateAvailable: true, // Специально true, чтобы сразу затестить оранжевую кнопку
+  });
+  const [botUpdateOpen, setBotUpdateOpen] = useState(false);
 
   const basePath = window.X_UI_BASE_PATH || '';
 
@@ -92,7 +90,6 @@ export default function IndexPage() {
   const [logsOpen, setLogsOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
   const [panelUpdateOpen, setPanelUpdateOpen] = useState(false);
-  const [botUpdateOpen, setBotUpdateOpen] = useState(false);
   const [sysHistoryOpen, setSysHistoryOpen] = useState(false);
   const [xrayMetricsOpen, setXrayMetricsOpen] = useState(false);
   const [xrayLogsOpen, setXrayLogsOpen] = useState(false);
@@ -101,11 +98,6 @@ export default function IndexPage() {
   const [configText, setConfigText] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingTip, setLoadingTip] = useState(t('loading'));
-
-  const refreshBotUpdateInfo = useCallback(async () => {
-    const msg = await HttpUtil.get<BotUpdateInfo>('/panel/api/server/getBotUpdateInfo');
-    if (msg?.success && msg.obj) setBotUpdateInfo(msg.obj);
-  }, []);
 
   useEffect(() => {
     HttpUtil.post<{ accessLogEnable?: boolean; devChannelEnable?: boolean }>(
@@ -119,8 +111,10 @@ export default function IndexPage() {
     HttpUtil.get<PanelUpdateInfo>('/panel/api/server/getPanelUpdateInfo').then((msg) => {
       if (msg?.success && msg.obj) setPanelUpdateInfo(msg.obj);
     });
-    refreshBotUpdateInfo();
-  }, [refreshBotUpdateInfo]);
+
+    // Тут в будущем будет твой запрос к бэкенду для бота:
+    // HttpUtil.get('/panel/api/server/getBotUpdateInfo').then(...)
+  }, []);
 
   const displayVersion = useMemo(
     () => window.X_UI_CUR_VER || panelUpdateInfo.currentVersion || '?',
@@ -147,10 +141,6 @@ export default function IndexPage() {
 
   function openPanelVersion() {
     setPanelUpdateOpen(true);
-  }
-
-  function openBotVersion() {
-    setBotUpdateOpen(true);
   }
 
   async function handleChannelChange(dev: boolean) {
@@ -293,46 +283,51 @@ export default function IndexPage() {
                     />
                   </Col>
 
-                  {botUpdateInfo.installed && (
-                    <Col xs={24} lg={12}>
-                      <Card
-                        title={
-                          <Space>
-                            <RobotOutlined />
-                            <span>Xray Bot</span>
-                            {isMobile && (
-                              <Tag color={botUpdateInfo.updateAvailable ? 'orange' : 'green'}>
-                                {botUpdateInfo.updateAvailable
-                                  ? formatPanelVersion(botUpdateInfo.latestVersion)
-                                  : formatPanelVersion(botUpdateInfo.currentVersion)}
-                              </Tag>
-                            )}
-                          </Space>
-                        }
-                        hoverable
-                        actions={[
-                          <Space
-                            key="bot-version"
-                            className={`action ${botUpdateInfo.updateAvailable ? 'action-update' : ''}`}
-                            role="button"
-                            tabIndex={0}
-                            aria-label={t('pages.index.updateBot')}
-                            onClick={openBotVersion}
-                            onKeyDown={activateOnKey(openBotVersion)}
-                          >
-                            <CloudDownloadOutlined />
-                            {!isMobile && (
-                              <span>
-                                {botUpdateInfo.updateAvailable
-                                  ? `${t('update')} ${formatPanelVersion(botUpdateInfo.latestVersion)}`
-                                  : formatPanelVersion(botUpdateInfo.currentVersion)}
-                              </span>
-                            )}
-                          </Space>,
-                        ]}
-                      />
-                    </Col>
-                  )}
+                  {/* НОВАЯ КАРТОЧКА: Xray Bot */}
+                  <Col xs={24} lg={12}>
+                    <Card
+                      title={
+                        <Space>
+                          <span>Xray Bot</span>
+                          {isMobile && botUpdateInfo.currentVersion && (
+                            <Tag color={botUpdateInfo.updateAvailable ? 'orange' : 'green'}>
+                              {botUpdateInfo.updateAvailable
+                                ? formatPanelVersion(botUpdateInfo.latestVersion)
+                                : formatPanelVersion(botUpdateInfo.currentVersion)}
+                            </Tag>
+                          )}
+                        </Space>
+                      }
+                      hoverable
+                      actions={[
+                        <Space className="action" key="bot-tg" role="button" tabIndex={0} aria-label="Bot TG" onClick={openTelegram} onKeyDown={activateOnKey(openTelegram)}>
+                          <RobotOutlined className="tg-icon" aria-hidden="true" />
+                          {!isMobile && <span>@KimaruBs</span>}
+                        </Space>,
+                        <Space
+                          key="bot-version"
+                          className={`action ${botUpdateInfo.updateAvailable ? 'action-update' : ''}`}
+                          role="button"
+                          tabIndex={0}
+                          aria-label="Update Bot"
+                          onClick={() => {
+                            messageApi.info('Запуск обновления бота (настройка бэкенда будет позже)');
+                            setBotUpdateOpen(true);
+                          }}
+                          onKeyDown={activateOnKey(() => setBotUpdateOpen(true))}
+                        >
+                          <CloudDownloadOutlined />
+                          {!isMobile && (
+                            <span>
+                              {botUpdateInfo.updateAvailable
+                                ? `${t('update')} ${formatPanelVersion(botUpdateInfo.latestVersion)}`
+                                : formatPanelVersion(botUpdateInfo.currentVersion)}
+                            </span>
+                          )}
+                        </Space>,
+                      ]}
+                    />
+                  </Col>
 
                   <Col xs={24} lg={12}>
                     <Card
@@ -536,15 +531,6 @@ export default function IndexPage() {
             devChannelEnable={devChannelEnable}
             onChannelChange={handleChannelChange}
             onClose={() => setPanelUpdateOpen(false)}
-            onBusy={setBusy}
-          />
-        </LazyMount>
-        <LazyMount when={botUpdateOpen}>
-          <BotUpdateModal
-            open={botUpdateOpen}
-            info={botUpdateInfo}
-            onClose={() => setBotUpdateOpen(false)}
-            onUpdated={setBotUpdateInfo}
             onBusy={setBusy}
           />
         </LazyMount>
