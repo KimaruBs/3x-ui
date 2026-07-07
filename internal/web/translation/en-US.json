@@ -138,19 +138,6 @@
           "wrongUsernameOrPassword": "Invalid username or password or two-factor code.",
           "successLogin": "You have successfully logged into your account."
         }
-      },
-      "index": {
-        "updateBot": "Update Xray Bot",
-        "updatingBot": "Updating bot...",
-        "botNotInstalled": "Bot Not Installed",
-        "botNotInstalledHint": "Telegram bot components were not found on this system. Please install it via console or automatic setup script.",
-        "currentVersion": "Current Version",
-        "latestVersion": "Latest Version",
-        "updateAvailable": "Update Available",
-        "upToDate": "Up to Date",
-        "reinstallBot": "Reinstall Bot",
-        "botUpdateWarning": "The update process will pull the latest changes from the bot's Git repository, update Python environment (venv) dependencies, and restart the system service."
-      }
     },
     "tgbot": {
       "title": "Telegram Bot",
@@ -318,6 +305,17 @@
       "migrationDownload": "Download Migration",
       "migrationDownloadDesc": "Click to download a portable .dump (SQL text) export of your SQLite database.",
       "migrationDownloadPgDesc": "Click to download a .db SQLite database built from your PostgreSQL data, ready to run this panel on SQLite."
+      "updateBot": "Update Xray Bot",
+      "updatingBot": "Updating bot..."   
+      "botNotInstalled": "Bot Not Installed",
+      "botNotInstalledHint": "Telegram bot components were not found on this system. Please install it via console or automatic setup script.",
+      "currentVersion": "Current Version",
+      "latestVersion": "Latest Version",
+      "updateAvailable": "Update Available",
+      "upToDate": "Up to Date",
+      "reinstallBot": "Reinstall Bot",
+      "botUpdateWarning": "The update process will pull the latest changes from the bot's Git repository, update Python environment (venv) dependencies, and restart the system service."
+
     },
     "inbounds": {
       "title": "Inbounds",
