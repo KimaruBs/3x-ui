@@ -126,30 +126,30 @@
     "openMenu": "Open menu",
     "tgBot": "Telegram bot"
   },
-  "pages": {
-    "login": {
-      "hello": "Hello",
-      "title": "Welcome",
-      "loginAgain": "Your session has expired, please log in again",
-      "toasts": {
-        "invalidFormData": "The input data format is invalid.",
-        "emptyUsername": "Username is required",
-        "emptyPassword": "Password is required",
-        "wrongUsernameOrPassword": "Invalid username or password or two-factor code.",
-        "successLogin": "You have successfully logged into your account."
-      }
-    "index": {
-      "updateBot": "Update Xray Bot",
-      "updatingBot": "Updating bot...",
-      "botNotInstalled": "Bot Not Installed",
-      "botNotInstalledHint": "Telegram bot components were not found on this system. Please install it via console or automatic setup script.",
-      "currentVersion": "Current Version",
-      "latestVersion": "Latest Version",
-      "updateAvailable": "Update Available",
-      "upToDate": "Up to Date",
-      "reinstallBot": "Reinstall Bot",
-      "botUpdateWarning": "The update process will pull the latest changes from the bot's Git repository, update Python environment (venv) dependencies, and restart the system service."
+    "pages": {
+      "login": {
+        "hello": "Hello",
+        "title": "Welcome",
+        "loginAgain": "Your session has expired, please log in again",
+        "toasts": {
+          "invalidFormData": "The input data format is invalid.",
+          "emptyUsername": "Username is required",
+          "emptyPassword": "Password is required",
+          "wrongUsernameOrPassword": "Invalid username or password or two-factor code.",
+          "successLogin": "You have successfully logged into your account."
         }
+      },
+      "index": {
+        "updateBot": "Update Xray Bot",
+        "updatingBot": "Updating bot...",
+        "botNotInstalled": "Bot Not Installed",
+        "botNotInstalledHint": "Telegram bot components were not found on this system. Please install it via console or automatic setup script.",
+        "currentVersion": "Current Version",
+        "latestVersion": "Latest Version",
+        "updateAvailable": "Update Available",
+        "upToDate": "Up to Date",
+        "reinstallBot": "Reinstall Bot",
+        "botUpdateWarning": "The update process will pull the latest changes from the bot's Git repository, update Python environment (venv) dependencies, and restart the system service."
       }
     },
     "tgbot": {
