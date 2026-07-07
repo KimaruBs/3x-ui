@@ -50,8 +50,11 @@ import { setMessageInstance } from '@/utils/messageBus';
 import StatusCard from './StatusCard';
 import XrayStatusCard from './XrayStatusCard';
 import type { PanelUpdateInfo } from './PanelUpdateModal';
+import type { BotUpdateInfo } from './BotUpdateModal';
+
 const JsonEditor = lazy(() => import('@/components/form/JsonEditor'));
 const PanelUpdateModal = lazy(() => import('./PanelUpdateModal'));
+const BotUpdateModal = lazy(() => import('./BotUpdateModal'));
 const LogModal = lazy(() => import('./LogModal'));
 const BackupModal = lazy(() => import('./BackupModal'));
 const SystemHistoryModal = lazy(() => import('./SystemHistoryModal'));
@@ -76,11 +79,12 @@ export default function IndexPage() {
     updateAvailable: false,
   });
 
-  // Локальный стейт для будущего Xray Bot
-  const [botUpdateInfo, setBotUpdateInfo] = useState({
-    currentVersion: '1.0.0',
-    latestVersion: '1.1.0',
-    updateAvailable: true,
+  // Реальный стейт для Xray Bot на основе интерфейса модалки
+  const [botUpdateInfo, setBotUpdateInfo] = useState<BotUpdateInfo>({
+    installed: false,
+    currentVersion: '',
+    latestVersion: '',
+    updateAvailable: false,
   });
   const [botUpdateOpen, setBotUpdateOpen] = useState(false);
 
@@ -110,6 +114,10 @@ export default function IndexPage() {
     });
     HttpUtil.get<PanelUpdateInfo>('/panel/api/server/getPanelUpdateInfo').then((msg) => {
       if (msg?.success && msg.obj) setPanelUpdateInfo(msg.obj);
+    });
+    // Запрос данных о версии бота с бэкенда
+    HttpUtil.get<BotUpdateInfo>('/panel/api/server/getBotUpdateInfo').then((msg) => {
+      if (msg?.success && msg.obj) setBotUpdateInfo(msg.obj);
     });
   }, []);
 
@@ -359,12 +367,18 @@ export default function IndexPage() {
                         title={
                           <Space>
                             <span>Xray Bot</span>
-                            {isMobile && botUpdateInfo.currentVersion && (
-                              <Tag color={botUpdateInfo.updateAvailable ? 'orange' : 'green'}>
-                                {botUpdateInfo.updateAvailable
-                                  ? formatPanelVersion(botUpdateInfo.latestVersion)
-                                  : formatPanelVersion(botUpdateInfo.currentVersion)}
-                              </Tag>
+                            {isMobile && (
+                              !botUpdateInfo.installed ? (
+                                <Tag color="red">{t('pages.index.botNotInstalled')}</Tag>
+                              ) : (
+                                botUpdateInfo.currentVersion && (
+                                  <Tag color={botUpdateInfo.updateAvailable ? 'orange' : 'green'}>
+                                    {botUpdateInfo.updateAvailable
+                                      ? formatPanelVersion(botUpdateInfo.latestVersion)
+                                      : formatPanelVersion(botUpdateInfo.currentVersion)}
+                                  </Tag>
+                                )
+                              )
                             )}
                           </Space>
                         }
@@ -380,18 +394,17 @@ export default function IndexPage() {
                             role="button"
                             tabIndex={0}
                             aria-label="Update Bot"
-                            onClick={() => {
-                              messageApi.info('Запуск обновления бота (настройка бэкенда будет позже)');
-                              setBotUpdateOpen(true);
-                            }}
+                            onClick={() => setBotUpdateOpen(true)}
                             onKeyDown={activateOnKey(() => setBotUpdateOpen(true))}
                           >
                             <CloudDownloadOutlined />
                             {!isMobile && (
                               <span>
-                                {botUpdateInfo.updateAvailable
-                                  ? `${t('update')} ${formatPanelVersion(botUpdateInfo.latestVersion)}`
-                                  : formatPanelVersion(botUpdateInfo.currentVersion)}
+                                {!botUpdateInfo.installed
+                                  ? t('pages.index.botNotInstalled')
+                                  : botUpdateInfo.updateAvailable
+                                    ? `${t('update')} ${formatPanelVersion(botUpdateInfo.latestVersion)}`
+                                    : formatPanelVersion(botUpdateInfo.currentVersion)}
                               </span>
                             )}
                           </Space>,
@@ -503,6 +516,17 @@ export default function IndexPage() {
             onBusy={setBusy}
           />
         </LazyMount>
+
+        <LazyMount when={botUpdateOpen}>
+          <BotUpdateModal
+            open={botUpdateOpen}
+            info={botUpdateInfo}
+            onClose={() => setBotUpdateOpen(false)}
+            onUpdated={(info) => setBotUpdateInfo(info)}
+            onBusy={setBusy}
+          />
+        </LazyMount>
+
         <LazyMount when={logsOpen}>
           <LogModal open={logsOpen} onClose={() => setLogsOpen(false)} />
         </LazyMount>
