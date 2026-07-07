@@ -306,7 +306,7 @@
       "migrationDownloadDesc": "Click to download a portable .dump (SQL text) export of your SQLite database.",
       "migrationDownloadPgDesc": "Click to download a .db SQLite database built from your PostgreSQL data, ready to run this panel on SQLite.",
       "updateBot": "Update Xray Bot",
-      "updatingBot": "Updating bot...".
+      "updatingBot": "Updating bot...",
       "botNotInstalled": "Bot Not Installed",
       "botNotInstalledHint": "Telegram bot components were not found on this system. Please install it via console or automatic setup script.",
       "currentVersion": "Current Version",
