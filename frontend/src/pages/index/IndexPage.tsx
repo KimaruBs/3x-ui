@@ -245,7 +245,7 @@ export default function IndexPage() {
                       }
                       hoverable
                       actions={[
-                        <Space className="action" key="tg" role="button" tabIndex={0} aria-label="@XrayUI" onClick={openTelegram} onKeyDown={activateOnKey(openTelegram)}>
+                        <Space className="action" key="tg" role="button" tabIndex={0} aria-label="@KimaruBS" onClick={openTelegram} onKeyDown={activateOnKey(openTelegram)}>
                           <TelegramFilled className="tg-icon" aria-hidden="true" />
                           {!isMobile && <span>@XrayUI</span>}
                         </Space>,
