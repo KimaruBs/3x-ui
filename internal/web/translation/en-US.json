@@ -138,6 +138,19 @@
         "wrongUsernameOrPassword": "Invalid username or password or two-factor code.",
         "successLogin": "You have successfully logged into your account."
       }
+    "index": {
+      "updateBot": "Update Xray Bot",
+      "updatingBot": "Updating bot...",
+      "botNotInstalled": "Bot Not Installed",
+      "botNotInstalledHint": "Telegram bot components were not found on this system. Please install it via console or automatic setup script.",
+      "currentVersion": "Current Version",
+      "latestVersion": "Latest Version",
+      "updateAvailable": "Update Available",
+      "upToDate": "Up to Date",
+      "reinstallBot": "Reinstall Bot",
+      "botUpdateWarning": "The update process will pull the latest changes from the bot's Git repository, update Python environment (venv) dependencies, and restart the system service."
+        }
+      }
     },
     "tgbot": {
       "title": "Telegram Bot",
@@ -163,18 +176,6 @@
       "liveLogs": "Live logs",
       "envEmpty": "Env file empty",
       "notInstalled": "Not installed",
-      "index": {
-        "updateBot": "Update Xray Bot",
-        "updatingBot": "Updating bot...",
-        "botNotInstalled": "Bot Not Installed",
-        "botNotInstalledHint": "Telegram bot components were not found on this system. Please install it via console or automatic setup script.",
-        "currentVersion": "Current Version",
-        "latestVersion": "Latest Version",
-        "updateAvailable": "Update Available",
-        "upToDate": "Up to Date",
-        "reinstallBot": "Reinstall Bot",
-        "botUpdateWarning": "The update process will pull the latest changes from the bot's Git repository, update Python environment (venv) dependencies, and restart the system service."
-      },
       "envFields": {
         "BOT_TOKEN": "Bot token",
         "ADMIN_IDS": "Admin IDs"
