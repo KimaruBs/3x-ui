@@ -82,7 +82,7 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 	g.POST("/restartXrayService", a.restartXrayService)
 	g.POST("/installXray/:version", a.installXray)
 	g.POST("/updatePanel", a.updatePanel)
-	g.POST("/updateBot", a.updateBot) // Этот эндпоинт теперь обрабатывает и Обновление, и Переустановку
+	g.POST("/updateBot", a.updateBot) 
 	g.POST("/setUpdateChannel", a.setUpdateChannel)
 	g.POST("/updateGeofile", a.updateGeofile)
 	g.POST("/updateGeofile/:fileName", a.updateGeofile)
@@ -616,20 +616,20 @@ func (a *ServerController) updateBot(c *gin.Context) {
 
 	var script string
 
-	// Проверяем, прилетел ли запрос на переустановку (reinstall=true) из POST-формы или query-параметра
+	// Проверяем, прилетел ли запрос на переустановку (reinstall=true)
 	if c.PostForm("reinstall") == "true" || c.Query("reinstall") == "true" {
 		logger.Info("Выполняется жесткая переустановка бота со сбросом конфликтов...")
-		// Скрипт переустановки: делает жесткий reset на состояние удаленной ветки репозитория, стирая любые локальные затыки
+		// Все операции Git выполняются строго ВНУТРИ абсолютного пути папки бота (absoluteBotDir)
 		script = fmt.Sprintf(
-			"cd %s && git remote set-url origin https://github.com/KimaruBs/3x-ui.git && git fetch --all && git reset --hard origin/%s && git pull && cd %s && if [ -d 'venv' ]; then ./venv/bin/pip install -r requirements.txt; else pip install -r requirements.txt; fi && sudo systemctl restart xray-bot",
-			baseDir, gitRemoteBranch, absoluteBotDir,
+			"cd %s && git remote set-url origin https://github.com/KimaruBs/3x-ui.git && git fetch --all && git reset --hard origin/%s && git pull && if [ -d 'venv' ]; then ./venv/bin/pip install -r requirements.txt; else pip install -r requirements.txt; fi && sudo systemctl restart xray-bot",
+			absoluteBotDir, gitRemoteBranch,
 		)
 	} else {
 		logger.Info("Выполняется стандартное обновление бота через git pull...")
-		// Обычное обновление через git pull
+		// Все операции Git выполняются строго ВНУТРИ абсолютного пути папки бота (absoluteBotDir)
 		script = fmt.Sprintf(
-			"cd %s && git remote set-url origin https://github.com/KimaruBs/3x-ui.git && git pull && cd %s && if [ -d 'venv' ]; then ./venv/bin/pip install -r requirements.txt; else pip install -r requirements.txt; fi && sudo systemctl restart xray-bot",
-			baseDir, absoluteBotDir,
+			"cd %s && git remote set-url origin https://github.com/KimaruBs/3x-ui.git && git pull && if [ -d 'venv' ]; then ./venv/bin/pip install -r requirements.txt; else pip install -r requirements.txt; fi && sudo systemctl restart xray-bot",
+			absoluteBotDir,
 		)
 	}
 
@@ -646,7 +646,7 @@ func (a *ServerController) updateBot(c *gin.Context) {
 
 	logger.Info("Bot processed successfully:", string(output))
 	
-	// Обнуляем кэш, чтобы заставить систему перепроверить актуальные данные
+	// Обнуляем кэш, чтобы система обновила данные версии на лету
 	cachedLatestBotVersion = "unknown"
 	a.getBotUpdateInfo(c)
 }
