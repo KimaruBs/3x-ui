@@ -3,9 +3,13 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
@@ -20,6 +24,10 @@ import (
 )
 
 var filenameRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-.]+$`)
+
+// Константы для управления Xray Bot
+const botDir = "xray-bot"       // Имя папки бота внутри твоего репозитория панели
+const gitRemoteBranch = "main"  // Укажи "master", если основная ветка твоего репозитория называется master
 
 // ServerController handles server management and status-related operations.
 type ServerController struct {
@@ -530,41 +538,83 @@ func (a *ServerController) setClientIps(c *gin.Context) {
 	jsonMsg(c, "Client IPs merged", err)
 }
 
-// getBotUpdateInfo проверяет статус установки и версии Xray Bot
+// getLatestBotVersion запрашивает хэш последнего коммита для папки бота из удаленного репозитория
+func getLatestBotVersion() string {
+	// Делаем git fetch, чтобы обновить локальный индекс изменений с GitHub
+	_ = exec.Command("git", "fetch", "origin").Run()
+
+	// Получаем SHA-1 хэш последнего коммита для конкретной папки бота в удаленной ветке
+	cmd := exec.Command("git", "log", "-n", "1", "--pretty=format:%h", fmt.Sprintf("origin/%s", gitRemoteBranch), "--", botDir)
+	output, err := cmd.CombinedOutput()
+	if err != nil || len(output) == 0 {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(output))
+}
+
+// getBotUpdateInfo проверяет статус установки и версии папки Xray Bot внутри монорепозитория
 func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
-	// TODO: В будущем вынесем логику парсинга файла в service.BotService
-	// Сейчас сделаем заглушку, которая полностью удовлетворяет типам фронтенда.
-	// Бэкенд должен прочитать твой файл 'version' в папке бота.
-	
-	botInfo := gin.H{
-		"installed":       true,   // true, если файл/папка бота существует
-		"currentVersion":  "1.0.0", // версия из твоего локального файла
-		"latestVersion":   "1.1.0", // версия, стянутая с гитхаба репозитория бота
-		"updateAvailable": true,    // результат сравнения строк версий
+	// Проверяем физическое наличие папки бота на сервере
+	if _, err := os.Stat(botDir); os.IsNotExist(err) {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"obj": gin.H{
+				"installed":       false,
+				"currentVersion":  "",
+				"latestVersion":   "remote",
+				"updateAvailable": false,
+			},
+		})
+		return
 	}
+
+	// Получаем локальный хэш коммита для папки бота
+	cmdLocal := exec.Command("git", "log", "-n", "1", "--pretty=format:%h", "--", botDir)
+	outLocal, err := cmdLocal.CombinedOutput()
+	currentVer := "local"
+	if err == nil && len(outLocal) > 0 {
+		currentVer = strings.TrimSpace(string(outLocal))
+	}
+
+	// Запрашиваем хэш коммита папки бота из GitHub (origin)
+	latestVer := getLatestBotVersion()
+
+	// Если хэши коммитов отличаются — значит на гитхабе в папку бота залили новые коммиты
+	updateAvailable := currentVer != "local" && latestVer != "unknown" && currentVer != latestVer
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"obj":     botInfo,
+		"obj": gin.H{
+			"installed":       true,
+			"currentVersion":  currentVer, // Вернет короткий SHA коммита, например "a1b2c3d"
+			"latestVersion":   latestVer,   // Вернет SHA коммита с апстрима
+			"updateAvailable": updateAvailable,
+		},
 	})
 }
 
-// updateBot запускает процесс обновления бота (git pull, venv, systemctl restart)
+// updateBot запускает процесс автоматического пулла изменений для монорепозитория, сборки venv и рестарта сервиса бота
 func (a *ServerController) updateBot(c *gin.Context) {
-	// Здесь будет выполняться bash-скрипт обновления бота.
-	// Имитируем успешное обновление для проверки фронтенда:
-	
-	updatedInfo := gin.H{
-		"installed":       true,
-		"currentVersion":  "1.1.0", // Версия стала актуальной
-		"latestVersion":   "1.1.0",
-		"updateAvailable": false,   // Обновлений больше нет
+	// Скрипт переходит в корень, подтягивает изменения git для всего репо (включая папку бота),
+	// затем заходит в папку бота, накатывает pip requirements и рестартует systemd юнит
+	script := fmt.Sprintf(
+		"git pull && cd %s && if [ -d 'venv' ]; then ./venv/bin/pip install -r requirements.txt; else pip install -r requirements.txt; fi && sudo systemctl restart xray-bot",
+		botDir,
+	)
+
+	cmd := exec.Command("bash", "-c", script)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Error("Update bot folder git pull failed:", err, string(output))
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"msg":     "Update failed: " + err.Error(),
+		})
+		return
 	}
 
-	// Отправляем ответ, который ожидает фронтенд в `onUpdated(res.obj)`
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"obj":     updatedInfo,
-	})
-}
+	logger.Info("Bot repository folder updated successfully:", string(output))
 
+	// Сразу возвращаем клиенту свежее состояние коммитов
+	a.getBotUpdateInfo(c)
+}
