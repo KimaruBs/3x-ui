@@ -491,7 +491,7 @@ func (a *ServerController) setClientIps(c *gin.Context) {
 
 // getLatestBotVersion запрашивает хэш последнего коммита для папки бота из репозитория kimargus через GitHub API
 func getLatestBotVersion() string {
-	url := fmt.Sprintf("https://api.github.com/repos/kimargus/3x-ui/commits?path=%s&sha=%s&per_page=1", botDir, gitRemoteBranch)
+	url := fmt.Sprintf("https://api.github.com/repos/KimaruBs/3x-ui/commits?path=%s&sha=%s&per_page=1", botDir, gitRemoteBranch)
 
 	client := http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
