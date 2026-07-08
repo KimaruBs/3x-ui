@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -496,7 +497,6 @@ func (a *ServerController) setClientIps(c *gin.Context) {
 }
 
 // Вспомогательная функция для очистки строки версии (оставляет только цифры и точки)
-// Превращает "1.0.0-dildak" или "v2.1.3-beta" строго в "1.0.0" или "2.1.3"
 func cleanVersionString(v string) string {
 	v = strings.TrimSpace(v)
 	re := regexp.MustCompile(`^v?([0-9.]+)`)
@@ -536,9 +536,20 @@ func getLatestBotVersion() string {
 	return cleanVersionString(string(body))
 }
 
-// getBotUpdateInfo проверяет статус установки и сравнивает только цифровые версии Xray Bot
+// getBotUpdateInfo проверяет статус установки и сравнивает цифровые версии Xray Bot
 func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
-	if _, err := os.Stat(botDir); os.IsNotExist(err) {
+	execPath, err := os.Executable()
+	if err != nil {
+		logger.Error("Не удалось определить путь исполняемого файла панели:", err)
+		c.JSON(http.StatusOK, gin.H{"success": false, "msg": "Internal server error"})
+		return
+	}
+	
+	baseDir := filepath.Dir(execPath)
+	absoluteBotDir := filepath.Join(baseDir, botDir)
+	absoluteVersionFile := filepath.Join(absoluteBotDir, "version")
+
+	if _, err := os.Stat(absoluteBotDir); os.IsNotExist(err) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"obj": gin.H{
@@ -553,15 +564,15 @@ func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
 
 	rawLocalVer := ""
 
-	// 1. Сначала пытаемся прочитать файл 'version' из папки бота
-	versionFile := botDir + "/version"
-	if data, err := os.ReadFile(versionFile); err == nil {
+	// 1. Сначала пытаемся прочитать файл 'version' из папки бота по абсолютному пути
+	if data, err := os.ReadFile(absoluteVersionFile); err == nil {
 		rawLocalVer = strings.TrimSpace(string(data))
 	}
 
-	// 2. Если файла нет, пробуем дернуть хэш из Git как запасной вариант
+	// 2. Если файла нет, пробуем дернуть хэш из Git внутри абсолютной директории бота
 	if rawLocalVer == "" {
-		cmdLocal := exec.Command("git", "log", "-n", "1", "--pretty=format:%h", "--", botDir)
+		cmdLocal := exec.Command("git", "log", "-n", "1", "--pretty=format:%h")
+		cmdLocal.Dir = absoluteBotDir
 		if outLocal, err := cmdLocal.CombinedOutput(); err == nil && len(outLocal) > 0 {
 			rawLocalVer = strings.TrimSpace(string(outLocal))
 		}
@@ -572,10 +583,10 @@ func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
 		rawLocalVer = "1.0.0-fallback"
 	}
 
-	// Очищаем локальную версию до чистых цифр для сравнения
+	// Очищаем локальную версию до чистых цифр для вывода и сравнения
 	currentVer := cleanVersionString(rawLocalVer)
 
-	// Если фоновый крон еще ни разу не запускался, принудительно запрашиваем версию один раз
+	// Запрашиваем очищенную актуальную версию с GitHub, если кэш пуст
 	if cachedLatestBotVersion == "unknown" {
 		cachedLatestBotVersion = getLatestBotVersion()
 	}
@@ -587,7 +598,7 @@ func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
 		"success": true,
 		"obj": gin.H{
 			"installed":       true,
-			"currentVersion":  rawLocalVer,            // Фронтенду показываем красивую полную строку (с текстом)
+			"currentVersion":  rawLocalVer,            // Полная исходная строка для фронтенда
 			"latestVersion":   cachedLatestBotVersion, // Чистые цифры из кэша (обновление каждые 90 сек)
 			"updateAvailable": updateAvailable,
 		},
@@ -614,7 +625,7 @@ func (a *ServerController) updateBot(c *gin.Context) {
 
 	logger.Info("Bot repository updated successfully:", string(output))
 	
-	// Сбрасываем кэш, чтобы при вызове getBotUpdateInfo статус обновился мгновенно
+	// Сбрасываем кэш, чтобы форсировать проверку версии заново
 	cachedLatestBotVersion = "unknown"
 	a.getBotUpdateInfo(c)
 }
