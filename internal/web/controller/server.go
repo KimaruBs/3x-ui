@@ -82,7 +82,7 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 	g.POST("/restartXrayService", a.restartXrayService)
 	g.POST("/installXray/:version", a.installXray)
 	g.POST("/updatePanel", a.updatePanel)
-	g.POST("/updateBot", a.updateBot)
+	g.POST("/updateBot", a.updateBot) // Этот эндпоинт теперь обрабатывает и Обновление, и Переустановку
 	g.POST("/setUpdateChannel", a.setUpdateChannel)
 	g.POST("/updateGeofile", a.updateGeofile)
 	g.POST("/updateGeofile/:fileName", a.updateGeofile)
@@ -564,12 +564,12 @@ func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
 
 	rawLocalVer := ""
 
-	// 1. Сначала пытаемся прочитать файл 'version' из папки бота по абсолютному пути
+	// 1. Пытаемся прочитать файл 'version' из папки бота по абсолютному пути
 	if data, err := os.ReadFile(absoluteVersionFile); err == nil {
 		rawLocalVer = strings.TrimSpace(string(data))
 	}
 
-	// 2. Если файла нет, пробуем дернуть хэш из Git внутри абсолютной директории бота
+	// 2. Если файла нет, пробуем дернуть хэш из Git
 	if rawLocalVer == "" {
 		cmdLocal := exec.Command("git", "log", "-n", "1", "--pretty=format:%h")
 		cmdLocal.Dir = absoluteBotDir
@@ -578,54 +578,75 @@ func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
 		}
 	}
 
-	// 3. Дефолтный фоллбэк, если на диске вообще ничего нет
+	// 3. Дефолтный фоллбэк
 	if rawLocalVer == "" {
-		rawLocalVer = "1.0.0-fallback"
+		rawLocalVer = "1.0.0"
 	}
 
-	// Очищаем локальную версию до чистых цифр для вывода и сравнения
 	currentVer := cleanVersionString(rawLocalVer)
 
-	// Запрашиваем очищенную актуальную версию с GitHub, если кэш пуст
 	if cachedLatestBotVersion == "unknown" {
 		cachedLatestBotVersion = getLatestBotVersion()
 	}
 
-	// Сравниваем строго очищенные цифровые версии
 	updateAvailable := cachedLatestBotVersion != "unknown" && currentVer != cachedLatestBotVersion
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"obj": gin.H{
 			"installed":       true,
-			"currentVersion":  rawLocalVer,            // Полная исходная строка для фронтенда
-			"latestVersion":   cachedLatestBotVersion, // Чистые цифры из кэша (обновление каждые 90 сек)
+			"currentVersion":  rawLocalVer,            
+			"latestVersion":   cachedLatestBotVersion, 
 			"updateAvailable": updateAvailable,
 		},
 	})
 }
 
-// updateBot запускает процесс обновления бота с принудительной сменой remote URL на KimaruBs
+// updateBot запускает процесс обновления ИЛИ принудительной переустановки бота
 func (a *ServerController) updateBot(c *gin.Context) {
-	script := fmt.Sprintf(
-		"cd %s/.. && git remote set-url origin https://github.com/KimaruBs/3x-ui.git && git pull && cd %s && if [ -d 'venv' ]; then ./venv/bin/pip install -r requirements.txt; else pip install -r requirements.txt; fi && sudo systemctl restart xray-bot",
-		botDir, botDir,
-	)
+	execPath, err := os.Executable()
+	if err != nil {
+		logger.Error("Update bot failed: cannot determine executable path:", err)
+		c.JSON(http.StatusOK, gin.H{"success": false, "msg": "Internal path error"})
+		return
+	}
+	
+	baseDir := filepath.Dir(execPath)
+	absoluteBotDir := filepath.Join(baseDir, botDir)
+
+	var script string
+
+	// Проверяем, прилетел ли запрос на переустановку (reinstall=true) из POST-формы или query-параметра
+	if c.PostForm("reinstall") == "true" || c.Query("reinstall") == "true" {
+		logger.Info("Выполняется жесткая переустановка бота со сбросом конфликтов...")
+		// Скрипт переустановки: делает жесткий reset на состояние удаленной ветки репозитория, стирая любые локальные затыки
+		script = fmt.Sprintf(
+			"cd %s && git remote set-url origin https://github.com/KimaruBs/3x-ui.git && git fetch --all && git reset --hard origin/%s && git pull && cd %s && if [ -d 'venv' ]; then ./venv/bin/pip install -r requirements.txt; else pip install -r requirements.txt; fi && sudo systemctl restart xray-bot",
+			baseDir, gitRemoteBranch, absoluteBotDir,
+		)
+	} else {
+		logger.Info("Выполняется стандартное обновление бота через git pull...")
+		// Обычное обновление через git pull
+		script = fmt.Sprintf(
+			"cd %s && git remote set-url origin https://github.com/KimaruBs/3x-ui.git && git pull && cd %s && if [ -d 'venv' ]; then ./venv/bin/pip install -r requirements.txt; else pip install -r requirements.txt; fi && sudo systemctl restart xray-bot",
+			baseDir, absoluteBotDir,
+		)
+	}
 
 	cmd := exec.Command("bash", "-c", script)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		logger.Error("Update bot folder failed:", err, string(output))
+		logger.Error("Bot update/reinstall action failed:", err, string(output))
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"msg":     "Update failed: " + err.Error(),
+			"msg":     "Action failed: " + err.Error() + "\nOutput: " + string(output),
 		})
 		return
 	}
 
-	logger.Info("Bot repository updated successfully:", string(output))
+	logger.Info("Bot processed successfully:", string(output))
 	
-	// Сбрасываем кэш, чтобы форсировать проверку версии заново
+	// Обнуляем кэш, чтобы заставить систему перепроверить актуальные данные
 	cachedLatestBotVersion = "unknown"
 	a.getBotUpdateInfo(c)
 }
