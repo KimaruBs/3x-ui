@@ -539,4 +539,99 @@ func getLatestBotVersion() string {
 func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
 	execPath, err := os.Executable()
 	if err != nil {
-		logger.Error
+		logger.Error("Не удалось определить путь исполняемого файла панели:", err)
+		c.JSON(http.StatusOK, gin.H{"success": false, "msg": "Internal server error"})
+		return
+	}
+	
+	baseDir := filepath.Dir(execPath)
+	absoluteBotDir := filepath.Join(baseDir, botDir)
+	absoluteVersionFile := filepath.Join(absoluteBotDir, "version")
+
+	if _, err := os.Stat(absoluteBotDir); os.IsNotExist(err) {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"obj": gin.H{
+				"installed":       false,
+				"currentVersion":  "",
+				"latestVersion":   "remote",
+				"updateAvailable": false,
+			},
+		})
+		return
+	}
+
+	rawLocalVer := ""
+
+	// Читаем файл 'version' из папки бота по абсолютному пути
+	if data, err := os.ReadFile(absoluteVersionFile); err == nil {
+		rawLocalVer = strings.TrimSpace(string(data))
+	}
+
+	// Дефолтный фоллбэк
+	if rawLocalVer == "" {
+		rawLocalVer = "1.0.0"
+	}
+
+	currentVer := cleanVersionString(rawLocalVer)
+
+	if cachedLatestBotVersion == "unknown" {
+		cachedLatestBotVersion = getLatestBotVersion()
+	}
+
+	updateAvailable := cachedLatestBotVersion != "unknown" && currentVer != cachedLatestBotVersion
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"obj": gin.H{
+			"installed":       true,
+			"currentVersion":  rawLocalVer,            
+			"latestVersion":   cachedLatestBotVersion, 
+			"updateAvailable": updateAvailable,
+		},
+	})
+}
+
+// updateBot скачивает свежий архив файлов бота напрямую с GitHub без использования локального Git
+func (a *ServerController) updateBot(c *gin.Context) {
+	execPath, err := os.Executable()
+	if err != nil {
+		logger.Error("Update bot failed: cannot determine executable path:", err)
+		c.JSON(http.StatusOK, gin.H{"success": false, "msg": "Internal path error"})
+		return
+	}
+	
+	baseDir := filepath.Dir(execPath)
+	absoluteBotDir := filepath.Join(baseDir, botDir)
+
+	logger.Info("Запуск обновления бота по прямой ссылке архива...")
+
+	// Скрипт скачивает zip-архив репозитория, извлекает конкретно содержимое папки xray-bot, 
+	// перезаписывает существующие файлы, ставит зависимости через pip и делает рестарт службы.
+	script := fmt.Sprintf(
+		"cd %s && wget -O bot_archive.zip https://github.com/KimaruBs/3x-ui/archive/refs/heads/main.zip && "+
+		"unzip -o bot_archive.zip '3x-ui-main/xray-bot/*' -d ./temp_bot_extract && "+
+		"cp -r ./temp_bot_extract/3x-ui-main/xray-bot/* %s/ && "+
+		"rm -rf bot_archive.zip temp_bot_extract && "+
+		"cd %s && if [ -d 'venv' ]; then ./venv/bin/pip install -r requirements.txt; else pip install -r requirements.txt; fi && "+
+		"sudo systemctl restart xray-bot",
+		baseDir, absoluteBotDir, absoluteBotDir,
+	)
+
+	cmd := exec.Command("bash", "-c", script)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Error("Bot direct update failed:", err, string(output))
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"msg":     "Action failed: " + err.Error() + "\nOutput: " + string(output),
+		})
+		return
+	}
+
+	logger.Info("Бот успешно скачан и обновлен:", string(output))
+	
+	// Обнуляем кэш версии
+	cachedLatestBotVersion = "unknown"
+	a.getBotUpdateInfo(c)
+}
