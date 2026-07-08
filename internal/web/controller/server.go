@@ -529,3 +529,42 @@ func (a *ServerController) setClientIps(c *gin.Context) {
 	err := (&service.InboundService{}).MergeInboundClientIps(ips)
 	jsonMsg(c, "Client IPs merged", err)
 }
+
+// getBotUpdateInfo проверяет статус установки и версии Xray Bot
+func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
+	// TODO: В будущем вынесем логику парсинга файла в service.BotService
+	// Сейчас сделаем заглушку, которая полностью удовлетворяет типам фронтенда.
+	// Бэкенд должен прочитать твой файл 'version' в папке бота.
+	
+	botInfo := gin.H{
+		"installed":       true,   // true, если файл/папка бота существует
+		"currentVersion":  "1.0.0", // версия из твоего локального файла
+		"latestVersion":   "1.1.0", // версия, стянутая с гитхаба репозитория бота
+		"updateAvailable": true,    // результат сравнения строк версий
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"obj":     botInfo,
+	})
+}
+
+// updateBot запускает процесс обновления бота (git pull, venv, systemctl restart)
+func (a *ServerController) updateBot(c *gin.Context) {
+	// Здесь будет выполняться bash-скрипт обновления бота.
+	// Имитируем успешное обновление для проверки фронтенда:
+	
+	updatedInfo := gin.H{
+		"installed":       true,
+		"currentVersion":  "1.1.0", // Версия стала актуальной
+		"latestVersion":   "1.1.0",
+		"updateAvailable": false,   // Обновлений больше нет
+	}
+
+	// Отправляем ответ, который ожидает фронтенд в `onUpdated(res.obj)`
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"obj":     updatedInfo,
+	})
+}
+
