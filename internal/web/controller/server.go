@@ -563,7 +563,7 @@ func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
 
 	// 3. Дефолтный фоллбэк, если на диске вообще ничего нет
 	if rawLocalVer == "" {
-		rawLocalVer = "1.0.0"
+		rawLocalVer = "1.0.0 dildak"
 	}
 
 	// Очищаем локальную версию до чистых цифр для вывода и сравнения
