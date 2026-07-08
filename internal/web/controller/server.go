@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -25,8 +27,8 @@ import (
 var filenameRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-.]+$`)
 
 // Константы для управления Xray Bot
-const botDir = "xray-bot"       // Имя папки бота внутри твоего репозитория панели
-const gitRemoteBranch = "main"  // Укажи "master", если основная ветка твоего репозитория называется master
+const botDir = "xray-bot"
+const gitRemoteBranch = "main" // Основная ветка репозитория kimargus
 
 // ServerController handles server management and status-related operations.
 type ServerController struct {
@@ -94,8 +96,6 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 
 // startTask registers the @2s ticker that refreshes server status, samples
 // xray metrics, and pushes the new snapshot to all websocket subscribers.
-// State + sampling live in ServerService; the controller only orchestrates
-// the cross-service side effects (xrayMetrics sample + websocket broadcast).
 func (a *ServerController) startTask() {
 	c := global.GetWebServer().GetCron()
 	_, _ = c.AddFunc("@every 2s", func() {
@@ -129,9 +129,6 @@ func parseHistoryBucket(c *gin.Context) (int, bool) {
 	return bucket, true
 }
 
-// getCpuHistoryBucket retrieves aggregated CPU usage history based on the specified time bucket.
-// Kept for back-compat; new callers should use /history/cpu/:bucket which
-// returns {"t","v"} (uniform across all metrics) instead of {"t","cpu"}.
 func (a *ServerController) getCpuHistoryBucket(c *gin.Context) {
 	bucket, ok := parseHistoryBucket(c)
 	if !ok {
@@ -140,9 +137,6 @@ func (a *ServerController) getCpuHistoryBucket(c *gin.Context) {
 	jsonObj(c, a.serverService.AggregateCpuHistory(bucket, 60), nil)
 }
 
-// getMetricHistoryBucket returns up to 60 buckets of history for a single
-// system metric (cpu, mem, netUp, netDown, online, load1/5/15). The
-// SystemHistoryModal calls one endpoint per active tab.
 func (a *ServerController) getMetricHistoryBucket(c *gin.Context) {
 	metric := c.Param("metric")
 	if !slices.Contains(service.SystemMetricKeys, metric) {
@@ -199,7 +193,6 @@ func (a *ServerController) getXrayVersion(c *gin.Context) {
 	jsonObj(c, versions, nil)
 }
 
-// getPanelUpdateInfo retrieves the current and latest panel version.
 func (a *ServerController) getPanelUpdateInfo(c *gin.Context) {
 	info, err := a.panelService.GetUpdateInfo()
 	if err != nil {
@@ -210,17 +203,12 @@ func (a *ServerController) getPanelUpdateInfo(c *gin.Context) {
 	jsonObj(c, info, nil)
 }
 
-// installXray installs or updates Xray to the specified version.
 func (a *ServerController) installXray(c *gin.Context) {
 	version := c.Param("version")
 	err := a.serverService.UpdateXray(version)
 	jsonMsg(c, I18nWeb(c, "pages.index.xraySwitchVersionPopover"), err)
 }
 
-// updatePanel starts a panel self-update. With no "dev" form value it follows
-// this panel's own channel setting; an explicit "dev" (sent by the master node
-// updater) overrides it for this run. The response's runId identifies this
-// update for a later getUpdateStatus poll.
 func (a *ServerController) updatePanel(c *gin.Context) {
 	devParam := c.PostForm("dev")
 	var runID int64
@@ -242,14 +230,10 @@ func (a *ServerController) updatePanel(c *gin.Context) {
 	jsonMsgObj(c, I18nWeb(c, "pages.index.panelUpdateStartedPopover"), obj, err)
 }
 
-// getUpdateStatus reports the outcome of the most recently launched panel
-// self-update (see updatePanel). Compare the returned runId against the one
-// updatePanel returned to tell this run's result apart from a stale one.
 func (a *ServerController) getUpdateStatus(c *gin.Context) {
 	jsonObj(c, a.panelService.GetUpdateStatus(), nil)
 }
 
-// setUpdateChannel toggles whether self-update tracks the rolling dev release.
 func (a *ServerController) setUpdateChannel(c *gin.Context) {
 	dev, err := strconv.ParseBool(c.PostForm("dev"))
 	if err != nil {
@@ -260,7 +244,6 @@ func (a *ServerController) setUpdateChannel(c *gin.Context) {
 	jsonMsg(c, I18nWeb(c, "pages.index.updateChannelChanged"), err)
 }
 
-// updateGeofile updates the specified geo file for Xray.
 func (a *ServerController) updateGeofile(c *gin.Context) {
 	fileName := c.Param("fileName")
 
@@ -274,7 +257,6 @@ func (a *ServerController) updateGeofile(c *gin.Context) {
 	jsonMsg(c, I18nWeb(c, "pages.index.geofileUpdatePopover"), err)
 }
 
-// stopXrayService stops the Xray service.
 func (a *ServerController) stopXrayService(c *gin.Context) {
 	err := a.serverService.StopXrayService()
 	if err != nil {
@@ -291,7 +273,6 @@ func (a *ServerController) stopXrayService(c *gin.Context) {
 	)
 }
 
-// restartXrayService restarts the Xray service.
 func (a *ServerController) restartXrayService(c *gin.Context) {
 	err := a.serverService.RestartXrayService()
 	if err != nil {
@@ -308,13 +289,11 @@ func (a *ServerController) restartXrayService(c *gin.Context) {
 	)
 }
 
-// getLogs retrieves the application logs based on count, level, and syslog filters.
 func (a *ServerController) getLogs(c *gin.Context) {
 	logs := a.serverService.GetLogs(c.Param("count"), c.PostForm("level"), c.PostForm("syslog"))
 	jsonObj(c, logs, nil)
 }
 
-// getXrayLogs retrieves Xray logs with filtering options for direct, blocked, and proxy traffic.
 func (a *ServerController) getXrayLogs(c *gin.Context) {
 	freedoms, blackholes := a.serverService.GetDefaultLogOutboundTags()
 	logs := a.serverService.GetXrayLogs(
@@ -329,7 +308,6 @@ func (a *ServerController) getXrayLogs(c *gin.Context) {
 	jsonObj(c, logs, nil)
 }
 
-// getConfigJson retrieves the Xray configuration as JSON.
 func (a *ServerController) getConfigJson(c *gin.Context) {
 	configJson, err := a.serverService.GetConfigJson()
 	if err != nil {
@@ -339,7 +317,6 @@ func (a *ServerController) getConfigJson(c *gin.Context) {
 	jsonObj(c, configJson, nil)
 }
 
-// getDb downloads the database file.
 func (a *ServerController) getDb(c *gin.Context) {
 	db, err := a.serverService.GetDb()
 	if err != nil {
@@ -358,8 +335,6 @@ func (a *ServerController) getDb(c *gin.Context) {
 	_, _ = c.Writer.Write(db)
 }
 
-// getMigration downloads a cross-engine migration file: a .dump on SQLite or a
-// .db SQLite database on PostgreSQL, so the data can seed the other backend.
 func (a *ServerController) getMigration(c *gin.Context) {
 	data, filename, err := a.serverService.GetMigration()
 	if err != nil {
@@ -376,7 +351,6 @@ func (a *ServerController) getMigration(c *gin.Context) {
 	_, _ = c.Writer.Write(data)
 }
 
-// importDB imports a database file and restarts the Xray service.
 func (a *ServerController) importDB(c *gin.Context) {
 	file, _, err := c.Request.FormFile("db")
 	if err != nil {
@@ -391,18 +365,11 @@ func (a *ServerController) importDB(c *gin.Context) {
 	jsonObj(c, I18nWeb(c, "pages.index.importDatabaseSuccess"), nil)
 }
 
-// descendants publishes read-only summaries of the nodes this panel manages so
-// a parent panel can surface them as transitive sub-nodes in a chained
-// topology. Called by the parent via the node's API token (#4983).
 func (a *ServerController) descendants(c *gin.Context) {
 	data, err := (&service.NodeService{}).LocalDescendants()
 	jsonObj(c, data, err)
 }
 
-// getWebCertFiles returns this panel's own web TLS certificate and key file
-// paths. The central panel calls it on a node (via the node's API token) so
-// "Set Cert from Panel" can fill a node-assigned inbound with paths that exist
-// on the node's filesystem instead of the central panel's — see issue #4854.
 func (a *ServerController) getWebCertFiles(c *gin.Context) {
 	certFile, err := a.settingService.GetCertFile()
 	if err != nil {
@@ -417,7 +384,6 @@ func (a *ServerController) getWebCertFiles(c *gin.Context) {
 	jsonObj(c, gin.H{"webCertFile": certFile, "webKeyFile": keyFile}, nil)
 }
 
-// getNewX25519Cert generates a new X25519 certificate.
 func (a *ServerController) getNewX25519Cert(c *gin.Context) {
 	cert, err := a.serverService.GetNewX25519Cert()
 	if err != nil {
@@ -427,7 +393,6 @@ func (a *ServerController) getNewX25519Cert(c *gin.Context) {
 	jsonObj(c, cert, nil)
 }
 
-// getNewmldsa65 generates a new ML-DSA-65 key.
 func (a *ServerController) getNewmldsa65(c *gin.Context) {
 	cert, err := a.serverService.GetNewmldsa65()
 	if err != nil {
@@ -437,7 +402,6 @@ func (a *ServerController) getNewmldsa65(c *gin.Context) {
 	jsonObj(c, cert, nil)
 }
 
-// getNewEchCert generates a new ECH certificate for the given SNI.
 func (a *ServerController) getNewEchCert(c *gin.Context) {
 	cert, err := a.serverService.GetNewEchCert(c.PostForm("sni"))
 	if err != nil {
@@ -447,8 +411,6 @@ func (a *ServerController) getNewEchCert(c *gin.Context) {
 	jsonObj(c, cert, nil)
 }
 
-// getCertHash returns the hex SHA-256 of the given certificate (file path or
-// inline content) so the panel can fill the pinned-cert field.
 func (a *ServerController) getCertHash(c *gin.Context) {
 	hashes, err := a.serverService.GetCertHash(c.PostForm("certFile"), c.PostForm("certContent"))
 	if err != nil {
@@ -458,8 +420,6 @@ func (a *ServerController) getCertHash(c *gin.Context) {
 	jsonObj(c, hashes, nil)
 }
 
-// getRemoteCertHash runs `xray tls ping` against the given server and returns
-// its live certificate SHA-256 hash(es) for pinning.
 func (a *ServerController) getRemoteCertHash(c *gin.Context) {
 	hashes, err := a.serverService.GetRemoteCertHash(c.PostForm("server"))
 	if err != nil {
@@ -469,8 +429,6 @@ func (a *ServerController) getRemoteCertHash(c *gin.Context) {
 	jsonObj(c, hashes, nil)
 }
 
-// scanRealityTarget runs a live TLS 1.3 probe against the candidate REALITY
-// target and returns a structured feasibility verdict plus the cert SAN names.
 func (a *ServerController) scanRealityTarget(c *gin.Context) {
 	res, err := a.serverService.ScanRealityTarget(c.PostForm("target"))
 	if err != nil {
@@ -480,9 +438,6 @@ func (a *ServerController) scanRealityTarget(c *gin.Context) {
 	jsonObj(c, res, nil)
 }
 
-// scanRealityTargets probes a batch of candidate REALITY targets (the supplied
-// comma-separated list, or the built-in seed set when empty) and returns each
-// verdict ranked by feasibility then latency.
 func (a *ServerController) scanRealityTargets(c *gin.Context) {
 	res, err := a.serverService.ScanRealityTargets(c.PostForm("targets"))
 	if err != nil {
@@ -492,7 +447,6 @@ func (a *ServerController) scanRealityTargets(c *gin.Context) {
 	jsonObj(c, res, nil)
 }
 
-// getNewVlessEnc generates a new VLESS encryption key.
 func (a *ServerController) getNewVlessEnc(c *gin.Context) {
 	out, err := a.serverService.GetNewVlessEnc()
 	if err != nil {
@@ -502,7 +456,6 @@ func (a *ServerController) getNewVlessEnc(c *gin.Context) {
 	jsonObj(c, out, nil)
 }
 
-// getNewUUID generates a new UUID.
 func (a *ServerController) getNewUUID(c *gin.Context) {
 	uuidResp, err := a.serverService.GetNewUUID()
 	if err != nil {
@@ -512,7 +465,6 @@ func (a *ServerController) getNewUUID(c *gin.Context) {
 	jsonObj(c, uuidResp, nil)
 }
 
-// getNewmlkem768 generates a new ML-KEM-768 key.
 func (a *ServerController) getNewmlkem768(c *gin.Context) {
 	out, err := a.serverService.GetNewmlkem768()
 	if err != nil {
@@ -537,23 +489,46 @@ func (a *ServerController) setClientIps(c *gin.Context) {
 	jsonMsg(c, "Client IPs merged", err)
 }
 
-// getLatestBotVersion запрашивает хэш последнего коммита для папки бота из удаленного репозитория
+// getLatestBotVersion запрашивает хэш последнего коммита для папки бота из репозитория kimargus через GitHub API
 func getLatestBotVersion() string {
-	// Делаем git fetch, чтобы обновить локальный индекс изменений с GitHub
-	_ = exec.Command("git", "fetch", "origin").Run()
+	url := fmt.Sprintf("https://api.github.com/repos/kimargus/3x-ui/commits?path=%s&sha=%s&per_page=1", botDir, gitRemoteBranch)
 
-	// Получаем SHA-1 хэш последнего коммита для конкретной папки бота в удаленной ветке
-	cmd := exec.Command("git", "log", "-n", "1", "--pretty=format:%h", fmt.Sprintf("origin/%s", gitRemoteBranch), "--", botDir)
-	output, err := cmd.CombinedOutput()
-	if err != nil || len(output) == 0 {
+	client := http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
 		return "unknown"
 	}
-	return strings.TrimSpace(string(output))
+	req.Header.Set("User-Agent", "3x-ui-panel")
+
+	resp, err := client.Get(url)
+	if err != nil {
+		resp, err = client.Do(req)
+	}
+	if err != nil {
+		return "unknown"
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "unknown"
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "unknown"
+	}
+
+	var commits []map[string]interface{}
+	if err := json.Unmarshal(body, &commits); err == nil && len(commits) > 0 {
+		if sha, ok := commits[0]["sha"].(string); ok && len(sha) >= 7 {
+			return sha[:7]
+		}
+	}
+	return "unknown"
 }
 
-// getBotUpdateInfo проверяет статус установки и версии папки Xray Bot внутри монорепозитория
+// getBotUpdateInfo проверяет статус установки и версии Xray Bot в репозитории kimargus
 func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
-	// Проверяем физическое наличие папки бота на сервере
 	if _, err := os.Stat(botDir); os.IsNotExist(err) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -567,35 +542,46 @@ func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
 		return
 	}
 
-	// Получаем локальный хэш коммита для папки бота
+	// 1. Пытаемся получить хэш текущего коммита локально через Git
 	cmdLocal := exec.Command("git", "log", "-n", "1", "--pretty=format:%h", "--", botDir)
 	outLocal, err := cmdLocal.CombinedOutput()
-	currentVer := "local"
+	currentVer := ""
 	if err == nil && len(outLocal) > 0 {
 		currentVer = strings.TrimSpace(string(outLocal))
 	}
 
-	// Запрашиваем хэш коммита папки бота из GitHub (origin)
+	// 2. Если Git вернул пустоту, читаем подстраховочный файл 'version' из папки бота
+	if currentVer == "" {
+		versionFile := botDir + "/version"
+		if data, err := os.ReadFile(versionFile); err == nil {
+			currentVer = strings.TrimSpace(string(data))
+		}
+	}
+
+	// Если определить так и не удалось, ставим понятную метку
+	if currentVer == "" {
+		currentVer = "v1.0.0"
+	}
+
+	// 3. Запрашиваем актуальный хэш коммита из репозитория kimargus на GitHub
 	latestVer := getLatestBotVersion()
 
-	// Если хэши коммитов отличаются — значит на гитхабе в папку бота залили новые коммиты
-	updateAvailable := currentVer != "local" && latestVer != "unknown" && currentVer != latestVer
+	// 4. Сравниваем версии
+	updateAvailable := latestVer != "unknown" && currentVer != latestVer
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"obj": gin.H{
 			"installed":       true,
-			"currentVersion":  currentVer, // Вернет короткий SHA коммита, например "a1b2c3d"
-			"latestVersion":   latestVer,   // Вернет SHA коммита с апстрима
+			"currentVersion":  currentVer,
+			"latestVersion":   latestVer,
 			"updateAvailable": updateAvailable,
 		},
 	})
 }
 
-// updateBot запускает процесс автоматического пулла изменений для монорепозитория, сборки venv и рестарта сервиса бота
+// updateBot запускает процесс обновления бота
 func (a *ServerController) updateBot(c *gin.Context) {
-	// Скрипт переходит в корень, подтягивает изменения git для всего репо (включая папку бота),
-	// затем заходит в папку бота, накатывает pip requirements и рестартует systemd юнит
 	script := fmt.Sprintf(
 		"git pull && cd %s && if [ -d 'venv' ]; then ./venv/bin/pip install -r requirements.txt; else pip install -r requirements.txt; fi && sudo systemctl restart xray-bot",
 		botDir,
@@ -604,7 +590,7 @@ func (a *ServerController) updateBot(c *gin.Context) {
 	cmd := exec.Command("bash", "-c", script)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		logger.Error("Update bot folder git pull failed:", err, string(output))
+		logger.Error("Update bot folder failed:", err, string(output))
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"msg":     "Update failed: " + err.Error(),
@@ -612,8 +598,6 @@ func (a *ServerController) updateBot(c *gin.Context) {
 		return
 	}
 
-	logger.Info("Bot repository folder updated successfully:", string(output))
-
-	// Сразу возвращаем клиенту свежее состояние коммитов
+	logger.Info("Bot repository updated successfully:", string(output))
 	a.getBotUpdateInfo(c)
 }
