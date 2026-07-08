@@ -29,6 +29,9 @@ var filenameRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-.]+$`)
 const botDir = "xray-bot"
 const gitRemoteBranch = "main" // Основная ветка репозитория kimargus
 
+// Глобальная переменная для кэширования удаленной версии бота
+var cachedLatestBotVersion string = "unknown"
+
 // ServerController handles server management and status-related operations.
 type ServerController struct {
 	BaseController
@@ -93,8 +96,7 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 	g.POST("/clientIps", a.setClientIps)
 }
 
-// startTask registers the @2s ticker that refreshes server status, samples
-// xray metrics, and pushes the new snapshot to all websocket subscribers.
+// startTask registers background tasks using a ticker.
 func (a *ServerController) startTask() {
 	c := global.GetWebServer().GetCron()
 	_, _ = c.AddFunc("@every 2s", func() {
@@ -109,6 +111,11 @@ func (a *ServerController) startTask() {
 		if err := service.PersistSystemMetrics(); err != nil {
 			logger.Warning("persist system metrics failed:", err)
 		}
+	})
+
+	// Фоновая проверка версии бота на GitHub каждые 90 секунд (1 минута 30 секунд)
+	_, _ = c.AddFunc("@every 1m30s", func() {
+		cachedLatestBotVersion = getLatestBotVersion()
 	})
 }
 
@@ -487,11 +494,11 @@ func (a *ServerController) setClientIps(c *gin.Context) {
 	err := (&service.InboundService{}).MergeInboundClientIps(ips)
 	jsonMsg(c, "Client IPs merged", err)
 }
+
 // Вспомогательная функция для очистки строки версии (оставляет только цифры и точки)
 // Превращает "1.0.0-dildak" или "v2.1.3-beta" строго в "1.0.0" или "2.1.3"
 func cleanVersionString(v string) string {
 	v = strings.TrimSpace(v)
-	// Ищем регуляркой чистую цифровую версию в начале строки
 	re := regexp.MustCompile(`^v?([0-9.]+)`)
 	matches := re.FindStringSubmatch(v)
 	if len(matches) > 1 {
@@ -526,7 +533,6 @@ func getLatestBotVersion() string {
 		return "unknown"
 	}
 
-	// Возвращаем очищенную версию с гитхаба (только цифры)
 	return cleanVersionString(string(body))
 }
 
@@ -563,24 +569,26 @@ func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
 
 	// 3. Дефолтный фоллбэк, если на диске вообще ничего нет
 	if rawLocalVer == "" {
-		rawLocalVer = "1.0.0 dildak"
+		rawLocalVer = "1.0.0-fallback"
 	}
 
-	// Очищаем локальную версию до чистых цифр для вывода и сравнения
+	// Очищаем локальную версию до чистых цифр для сравнения
 	currentVer := cleanVersionString(rawLocalVer)
 
-	// Запрашиваем очищенную актуальную версию с GitHub
-	latestVer := getLatestBotVersion()
+	// Если фоновый крон еще ни разу не запускался, принудительно запрашиваем версию один раз
+	if cachedLatestBotVersion == "unknown" {
+		cachedLatestBotVersion = getLatestBotVersion()
+	}
 
-	// Сравниваем строго очищенные цифровые версии (например, "1.0.0" != "1.0.1")
-	updateAvailable := latestVer != "unknown" && currentVer != latestVer
+	// Сравниваем строго очищенные цифровые версии
+	updateAvailable := cachedLatestBotVersion != "unknown" && currentVer != cachedLatestBotVersion
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"obj": gin.H{
 			"installed":       true,
-			"currentVersion":  rawLocalVer, // Фронтенду показываем красивую полную строку (с текстом, если он есть)
-			"latestVersion":   latestVer,   // Здесь будут чистые циферки с гитхаба
+			"currentVersion":  rawLocalVer,            // Фронтенду показываем красивую полную строку (с текстом)
+			"latestVersion":   cachedLatestBotVersion, // Чистые цифры из кэша (обновление каждые 90 сек)
 			"updateAvailable": updateAvailable,
 		},
 	})
@@ -588,7 +596,6 @@ func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
 
 // updateBot запускает процесс обновления бота с принудительной сменой remote URL на KimaruBs
 func (a *ServerController) updateBot(c *gin.Context) {
-	// Скрипт заходит в корень, жестко перешивает origin на твой репо, делает pull, обновляет pip и рестартит систему
 	script := fmt.Sprintf(
 		"cd %s/.. && git remote set-url origin https://github.com/KimaruBs/3x-ui.git && git pull && cd %s && if [ -d 'venv' ]; then ./venv/bin/pip install -r requirements.txt; else pip install -r requirements.txt; fi && sudo systemctl restart xray-bot",
 		botDir, botDir,
@@ -606,5 +613,8 @@ func (a *ServerController) updateBot(c *gin.Context) {
 	}
 
 	logger.Info("Bot repository updated successfully:", string(output))
+	
+	// Сбрасываем кэш, чтобы при вызове getBotUpdateInfo статус обновился мгновенно
+	cachedLatestBotVersion = "unknown"
 	a.getBotUpdateInfo(c)
 }
