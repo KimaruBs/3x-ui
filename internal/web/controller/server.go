@@ -488,22 +488,31 @@ func (a *ServerController) setClientIps(c *gin.Context) {
 	err := (&service.InboundService{}).MergeInboundClientIps(ips)
 	jsonMsg(c, "Client IPs merged", err)
 }
+// Вспомогательная функция для очистки строки версии (оставляет только цифры и точки)
+// Превращает "1.0.0-dildak" или "v2.1.3-beta" строго в "1.0.0" или "2.1.3"
+func cleanVersionString(v string) string {
+	v = strings.TrimSpace(v)
+	// Ищем регуляркой чистую цифровую версию в начале строки
+	re := regexp.MustCompile(`^v?([0-9.]+)`)
+	matches := re.FindStringSubmatch(v)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	return v
+}
 
-// getLatestBotVersion запрашивает хэш последнего коммита для папки бота из репозитория kimargus через GitHub API
+// getLatestBotVersion качает текстовый файл версии напрямую из репозитория KimaruBs
 func getLatestBotVersion() string {
-	url := fmt.Sprintf("https://api.github.com/repos/KimaruBs/3x-ui/commits?path=%s&sha=%s&per_page=1", botDir, gitRemoteBranch)
+	url := "https://raw.githubusercontent.com/KimaruBs/3x-ui/refs/heads/main/xray-bot/version"
 
 	client := http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return "unknown"
 	}
-	req.Header.Set("User-Agent", "3x-ui-panel")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
 
-	resp, err := client.Get(url)
-	if err != nil {
-		resp, err = client.Do(req)
-	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "unknown"
 	}
@@ -518,16 +527,11 @@ func getLatestBotVersion() string {
 		return "unknown"
 	}
 
-	var commits []map[string]interface{}
-	if err := json.Unmarshal(body, &commits); err == nil && len(commits) > 0 {
-		if sha, ok := commits[0]["sha"].(string); ok && len(sha) >= 7 {
-			return sha[:7]
-		}
-	}
-	return "unknown"
+	// Возвращаем очищенную версию с гитхаба (только цифры)
+	return cleanVersionString(string(body))
 }
 
-// getBotUpdateInfo проверяет статус установки и версии Xray Bot в репозитории kimargus
+// getBotUpdateInfo проверяет статус установки и сравнивает только цифровые версии Xray Bot
 func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
 	if _, err := os.Stat(botDir); os.IsNotExist(err) {
 		c.JSON(http.StatusOK, gin.H{
@@ -542,49 +546,53 @@ func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
 		return
 	}
 
-	// 1. Пытаемся получить хэш текущего коммита локально через Git
-	cmdLocal := exec.Command("git", "log", "-n", "1", "--pretty=format:%h", "--", botDir)
-	outLocal, err := cmdLocal.CombinedOutput()
-	currentVer := ""
-	if err == nil && len(outLocal) > 0 {
-		currentVer = strings.TrimSpace(string(outLocal))
+	rawLocalVer := ""
+
+	// 1. Сначала пытаемся прочитать файл 'version' из папки бота
+	versionFile := botDir + "/version"
+	if data, err := os.ReadFile(versionFile); err == nil {
+		rawLocalVer = strings.TrimSpace(string(data))
 	}
 
-	// 2. Если Git вернул пустоту, читаем подстраховочный файл 'version' из папки бота
-	if currentVer == "" {
-		versionFile := botDir + "/version"
-		if data, err := os.ReadFile(versionFile); err == nil {
-			currentVer = strings.TrimSpace(string(data))
+	// 2. Если файла нет, пробуем дернуть хэш из Git как запасной вариант
+	if rawLocalVer == "" {
+		cmdLocal := exec.Command("git", "log", "-n", "1", "--pretty=format:%h", "--", botDir)
+		if outLocal, err := cmdLocal.CombinedOutput(); err == nil && len(outLocal) > 0 {
+			rawLocalVer = strings.TrimSpace(string(outLocal))
 		}
 	}
 
-	// Если определить так и не удалось, ставим понятную метку
-	if currentVer == "" {
-		currentVer = "v1.0.0"
+	// 3. Дефолтный фоллбэк, если на диске вообще ничего нет
+	if rawLocalVer == "" {
+		rawLocalVer = "1.0.0"
 	}
 
-	// 3. Запрашиваем актуальный хэш коммита из репозитория kimargus на GitHub
+	// Очищаем локальную версию до чистых цифр для вывода и сравнения
+	currentVer := cleanVersionString(rawLocalVer)
+
+	// Запрашиваем очищенную актуальную версию с GitHub
 	latestVer := getLatestBotVersion()
 
-	// 4. Сравниваем версии
+	// Сравниваем строго очищенные цифровые версии (например, "1.0.0" != "1.0.1")
 	updateAvailable := latestVer != "unknown" && currentVer != latestVer
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"obj": gin.H{
 			"installed":       true,
-			"currentVersion":  currentVer,
-			"latestVersion":   latestVer,
+			"currentVersion":  rawLocalVer, // Фронтенду показываем красивую полную строку (с текстом, если он есть)
+			"latestVersion":   latestVer,   // Здесь будут чистые циферки с гитхаба
 			"updateAvailable": updateAvailable,
 		},
 	})
 }
 
-// updateBot запускает процесс обновления бота
+// updateBot запускает процесс обновления бота с принудительной сменой remote URL на KimaruBs
 func (a *ServerController) updateBot(c *gin.Context) {
+	// Скрипт заходит в корень, жестко перешивает origin на твой репо, делает pull, обновляет pip и рестартит систему
 	script := fmt.Sprintf(
-		"git pull && cd %s && if [ -d 'venv' ]; then ./venv/bin/pip install -r requirements.txt; else pip install -r requirements.txt; fi && sudo systemctl restart xray-bot",
-		botDir,
+		"cd %s/.. && git remote set-url origin https://github.com/KimaruBs/3x-ui.git && git pull && cd %s && if [ -d 'venv' ]; then ./venv/bin/pip install -r requirements.txt; else pip install -r requirements.txt; fi && sudo systemctl restart xray-bot",
+		botDir, botDir,
 	)
 
 	cmd := exec.Command("bash", "-c", script)
