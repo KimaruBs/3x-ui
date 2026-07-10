@@ -1,6 +1,9 @@
 package controller
 
 import (
+	"archive/zip"
+	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -592,7 +595,7 @@ func (a *ServerController) getBotUpdateInfo(c *gin.Context) {
 	})
 }
 
-// updateBot скачивает свежий архив файлов бота напрямую с GitHub без использования локального Git
+// updateBot скачивает свежий архив файлов бота напрямую с GitHub на чистом Go и обновляет его (Cross-platform)
 func (a *ServerController) updateBot(c *gin.Context) {
 	execPath, err := os.Executable()
 	if err != nil {
@@ -604,34 +607,161 @@ func (a *ServerController) updateBot(c *gin.Context) {
 	baseDir := filepath.Dir(execPath)
 	absoluteBotDir := filepath.Join(baseDir, botDir)
 
-	logger.Info("Запуск обновления бота по прямой ссылке архива...")
+	logger.Info("Запуск кроссплатформенного обновления бота на чистом Go...")
 
-	// Скрипт скачивает zip-архив репозитория, извлекает конкретно содержимое папки xray-bot, 
-	// перезаписывает существующие файлы, ставит зависимости через pip и делает рестарт службы.
-	script := fmt.Sprintf(
-		"cd %s && wget -O bot_archive.zip https://github.com/KimaruBs/3x-ui/archive/refs/heads/main.zip && "+
-		"unzip -o bot_archive.zip '3x-ui-main/xray-bot/*' -d ./temp_bot_extract && "+
-		"cp -r ./temp_bot_extract/3x-ui-main/xray-bot/* %s/ && "+
-		"rm -rf bot_archive.zip temp_bot_extract && "+
-		"cd %s && if [ -d 'venv' ]; then ./venv/bin/pip install -r requirements.txt; else pip install -r requirements.txt; fi && "+
-		"sudo systemctl restart xray-bot",
-		baseDir, absoluteBotDir, absoluteBotDir,
-	)
-
-	cmd := exec.Command("bash", "-c", script)
-	output, err := cmd.CombinedOutput()
+	// 1. Скачиваем ZIP архив в память
+	archiveURL := "https://github.com/KimaruBs/3x-ui/archive/refs/heads/main.zip"
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(archiveURL)
 	if err != nil {
-		logger.Error("Bot direct update failed:", err, string(output))
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"msg":     "Action failed: " + err.Error() + "\nOutput: " + string(output),
-		})
+		logger.Error("Failed to download bot archive:", err)
+		c.JSON(http.StatusOK, gin.H{"success": false, "msg": "Download failed: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		c.JSON(http.StatusOK, gin.H{"success": false, "msg": "Download failed with status: " + resp.Status})
 		return
 	}
 
-	logger.Info("Бот успешно скачан и обновлен:", string(output))
-	
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "msg": "Read archive failed: " + err.Error()})
+		return
+	}
+
+	// 2. Распаковываем ZIP-архив на лету средствами Go
+	zipReader, err := zip.NewReader(bytes.NewReader(bodyBytes), int64(len(bodyBytes)))
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "msg": "Parse ZIP failed: " + err.Error()})
+		return
+	}
+
+	// Префикс пути, который GitHub создает внутри архива, и целевая папка внутри репозитория
+	targetPrefix := "3x-ui-main/xray-bot/"
+
+	// Гарантируем, что папка бота существует перед записью файлов
+	if err := os.MkdirAll(absoluteBotDir, 0755); err != nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "msg": "Create directory failed: " + err.Error()})
+		return
+	}
+
+	for _, file := range zipReader.File {
+		// Проверяем, относится ли файл к нужной подпапке xray-bot
+		if !strings.HasPrefix(file.Name, targetPrefix) {
+			continue
+		}
+
+		// Вычисляем относительный путь внутри папки xray-bot
+		relPath := strings.TrimPrefix(file.Name, targetPrefix)
+		if relPath == "" {
+			continue
+		}
+
+		// Формируем финальный абсолютный путь на сервере
+		outPath := filepath.Join(absoluteBotDir, relPath)
+
+		// Если это директория, создаем её
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(outPath, 0755); err != nil {
+				c.JSON(http.StatusOK, gin.H{"success": false, "msg": "Create internal folder failed: " + err.Error()})
+				return
+			}
+			continue
+		}
+
+		// Создаем родительские папки для файлов на случай, если они еще не созданы
+		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "msg": "Create parent subfolders failed: " + err.Error()})
+			return
+		}
+
+		// Открываем файл из архива и перезаписываем его на диске
+		rc, err := file.Open()
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "msg": "Open zipped file failed: " + err.Error()})
+			return
+		}
+
+		outFile, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
+		if err != nil {
+			rc.Close()
+			c.JSON(http.StatusOK, gin.H{"success": false, "msg": "Write unpacked file failed: " + err.Error()})
+			return
+		}
+
+		_, err = io.Copy(outFile, rc)
+		outFile.Close()
+		rc.Close()
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"success": false, "msg": "Copy unpacked data failed: " + err.Error()})
+			return
+		}
+	}
+
+	logger.Info("Архив успешно распакован на чистом Go. Установка зависимостей и перезапуск...")
+
+	// 3. Выполняем установку зависимостей pip и перезапуск в зависимости от операционной системы
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	var pipCmd *exec.Cmd
+	var restartCmd *exec.Cmd
+
+	// Проверяем, есть ли venv
+	venvPip := filepath.Join(absoluteBotDir, "venv", "bin", "pip")
+	if _, err := os.Stat(filepath.Join(absoluteBotDir, "venv", "Scripts", "pip.exe")); err == nil {
+		venvPip = filepath.Join(absoluteBotDir, "venv", "Scripts", "pip.exe")
+	}
+
+	hasVenv := false
+	if _, err := os.Stat(venvPip); err == nil {
+		hasVenv = true
+	}
+
+	// Проверяем операционную систему на этапе выполнения панели
+	if filepath.Separator == '\\' {
+		// WINDOWS ENVIRONMENT
+		reqPath := filepath.Join(absoluteBotDir, "requirements.txt")
+		if hasVenv {
+			pipCmd = exec.CommandContext(ctx, "cmd", "/c", fmt.Sprintf(`"%s" install -r "%s"`, venvPip, reqPath))
+		} else {
+			pipCmd = exec.CommandContext(ctx, "cmd", "/c", fmt.Sprintf(`pip install -r "%s"`, reqPath))
+		}
+		// На винде просто пытаемся дёрнуть nssm, службу или батник, если они завязаны
+		restartCmd = exec.CommandContext(ctx, "cmd", "/c", "net stop xray-bot && net start xray-bot")
+	} else {
+		// LINUX / UNIX ENVIRONMENT (Любые дистрибутивы: Ubuntu, Debian, Alpine, CentOS и т.д.)
+		reqPath := filepath.Join(absoluteBotDir, "requirements.txt")
+		if hasVenv {
+			pipCmd = exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf(`"%s" install -r "%s"`, venvPip, reqPath))
+		} else {
+			pipCmd = exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf(`pip install -r "%s"`, reqPath))
+		}
+
+		// Универсальный перезапуск демона Linux с проверкой на наличие systemctl
+		restartCmd = exec.CommandContext(ctx, "sh", "-c", "if command -v systemctl >/dev/null 2>&1; then sudo systemctl restart xray-bot || systemctl restart xray-bot; fi")
+	}
+
+	// Запускаем pip install
+	if pipOut, err := pipCmd.CombinedOutput(); err != nil {
+		logger.Warning("Pip install finished with notice/error:", err, string(pipOut))
+	}
+
+	// Перезапускаем службу
+	var restartMsg string
+	if restartOut, err := restartCmd.CombinedOutput(); err != nil {
+		restartMsg = "Обновлено, но не удалось перезапустить службу (возможно служба не настроена): " + err.Error()
+		logger.Warning(restartMsg, string(restartOut))
+	} else {
+		restartMsg = "Бот успешно обновлен и перезапущен."
+		logger.Info(restartMsg)
+	}
+
 	// Обнуляем кэш версии
 	cachedLatestBotVersion = "unknown"
+	
+	// Возвращаем обновленный статус в UI
 	a.getBotUpdateInfo(c)
 }
