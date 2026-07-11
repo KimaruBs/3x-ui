@@ -22,7 +22,23 @@ const (
 	tgBotDir        = "/usr/local/x-ui/xray-bot"
 	tgBotScriptPath = "/usr/bin/xray-bot"
 	tgBotUnitPath   = "/etc/systemd/system/xray-bot.service"
+	tgBotOpenRCPath = "/etc/init.d/xray-bot"
+	// Путь к файлу лога OpenRC-юнита — совпадает с тем, что пишет install.sh,
+	// чтобы вкладка логов на Alpine читала ровно тот же файл, куда льёт служба.
+	tgBotOpenRCLogPath = "/var/log/xray-bot.log"
 )
+
+// isAlpine определяет, работаем ли мы на Alpine (OpenRC), а не на
+// systemd-дистрибутиве. Читает /etc/os-release так же, как это делает
+// install.sh при определении $release.
+func isAlpine() bool {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return false
+	}
+	content := string(data)
+	return strings.Contains(content, `ID=alpine`) || strings.Contains(content, `ID="alpine"`)
+}
 
 type TgBotController struct {
 	BaseController
@@ -61,7 +77,15 @@ func (a *TgBotController) initRouter(g *gin.RouterGroup) {
 
 func (a *TgBotController) getLogs(c *gin.Context) {
 	lines := c.DefaultQuery("lines", "200")
-	out, err := runCmd("journalctl", "-u", tgBotServiceName, "-n", lines, "--no-pager", "-o", "cat")
+
+	var out string
+	var err error
+	if isAlpine() {
+		out, err = runCmd("tail", "-n", lines, tgBotOpenRCLogPath)
+	} else {
+		out, err = runCmd("journalctl", "-u", tgBotServiceName, "-n", lines, "--no-pager", "-o", "cat")
+	}
+
 	if err != nil && out == "" {
 		c.JSON(http.StatusOK, gin.H{"success": false, "msg": err.Error()})
 		return
@@ -79,7 +103,15 @@ func (a *TgBotController) streamLogs(c *gin.Context) {
 	c.Header("X-Accel-Buffering", "no") // на случай nginx-проксирования перед панелью
 
 	ctx := c.Request.Context()
-	cmd := exec.CommandContext(ctx, "journalctl", "-u", tgBotServiceName, "-n", "200", "-f", "-o", "cat")
+
+	var cmd *exec.Cmd
+	if isAlpine() {
+		// На Alpine нет journald — тейлим лог-файл, который сама служба
+		// пишет через output_log в OpenRC-юните.
+		cmd = exec.CommandContext(ctx, "tail", "-n", "200", "-F", tgBotOpenRCLogPath)
+	} else {
+		cmd = exec.CommandContext(ctx, "journalctl", "-u", tgBotServiceName, "-n", "200", "-f", "-o", "cat")
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -112,6 +144,10 @@ func (a *TgBotController) streamLogs(c *gin.Context) {
 // ---------------------------------------------------------------------------
 
 func isServiceActive(name string) bool {
+	if isAlpine() {
+		cmd := exec.Command("rc-service", name, "status")
+		return cmd.Run() == nil
+	}
 	cmd := exec.Command("systemctl", "is-active", "--quiet", name)
 	return cmd.Run() == nil
 }
@@ -130,7 +166,12 @@ func (a *TgBotController) getStatus(c *gin.Context) {
 // ---------------------------------------------------------------------------
 
 func runSystemctl(action, service string) error {
-	cmd := exec.Command("systemctl", action, service)
+	var cmd *exec.Cmd
+	if isAlpine() {
+		cmd = exec.Command("rc-service", service, action)
+	} else {
+		cmd = exec.Command("systemctl", action, service)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s: %s", err.Error(), strings.TrimSpace(string(out)))
@@ -351,11 +392,18 @@ func checkPythonVenv() depCheck {
 }
 
 func (a *TgBotController) checkDependencies(c *gin.Context) {
+	initTool := "systemctl"
+	initArgs := []string{"--version"}
+	if isAlpine() {
+		initTool = "rc-service"
+		initArgs = nil // у rc-service нет --version, просто проверяем наличие бинаря
+	}
+
 	deps := []depCheck{
 		checkCommand("git", "--version"),
 		checkCommand("python3", "--version"),
 		checkPythonVenv(),
-		checkCommand("systemctl", "--version"),
+		checkCommand(initTool, initArgs...),
 	}
 	allOk := true
 	for _, d := range deps {
@@ -381,11 +429,15 @@ func (a *TgBotController) checkInstalled(c *gin.Context) {
 	appPath := fmt.Sprintf("%s/src/app.py", tgBotDir)
 	venvPath := fmt.Sprintf("%s/venv/bin/python3", tgBotDir)
 	envPath := fmt.Sprintf("%s/src/.env", tgBotDir)
+	unitPath := tgBotUnitPath
+	if isAlpine() {
+		unitPath = tgBotOpenRCPath
+	}
 
 	_, appErr := os.Stat(appPath)
 	_, venvErr := os.Stat(venvPath)
 	_, envErr := os.Stat(envPath)
-	_, unitErr := os.Stat(tgBotUnitPath)
+	_, unitErr := os.Stat(unitPath)
 
 	installed := appErr == nil && venvErr == nil && unitErr == nil
 
@@ -478,7 +530,47 @@ func (a *TgBotController) installBot(c *gin.Context) {
 		}
 	}
 
-	unit := fmt.Sprintf(`[Unit]
+	if isAlpine() {
+		unit := fmt.Sprintf(`#!/sbin/openrc-run
+name="xray-bot"
+description="3x-ui Xray Telegram Bot"
+command="%s/venv/bin/python3"
+command_args="app.py"
+command_background="yes"
+directory="%s/src"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="%s"
+error_log="%s"
+
+depend() {
+    need net
+}
+`, tgBotDir, tgBotDir, tgBotOpenRCLogPath, tgBotOpenRCLogPath)
+
+		ok = step("Запись OpenRC unit-файла", func() (string, error) {
+			if err := os.WriteFile(tgBotOpenRCPath, []byte(unit), 0755); err != nil {
+				return "", err
+			}
+			return "", nil
+		})
+		if !ok {
+			c.JSON(http.StatusOK, gin.H{"success": false, "msg": logBuf.String()})
+			return
+		}
+
+		step("rc-update add + restart", func() (string, error) {
+			out1, _ := runCmd("rc-update", "add", tgBotServiceName, "default")
+			out2, err2 := runCmd("rc-service", tgBotServiceName, "restart")
+			if err2 != nil {
+				// Первый запуск после установки — restart может не найти,
+				// что останавливать, тогда просто стартуем.
+				out2b, err2b := runCmd("rc-service", tgBotServiceName, "start")
+				return out1 + out2 + out2b, err2b
+			}
+			return out1 + out2, nil
+		})
+	} else {
+		unit := fmt.Sprintf(`[Unit]
 Description=3x-ui Xray Telegram Bot
 After=network.target
 
@@ -494,20 +586,21 @@ RestartSec=3s
 WantedBy=multi-user.target
 `, tgBotDir, tgBotDir)
 
-	ok = step("Запись systemd unit-файла", func() (string, error) {
-		return "", os.WriteFile(tgBotUnitPath, []byte(unit), 0644)
-	})
-	if !ok {
-		c.JSON(http.StatusOK, gin.H{"success": false, "msg": logBuf.String()})
-		return
-	}
+		ok = step("Запись systemd unit-файла", func() (string, error) {
+			return "", os.WriteFile(tgBotUnitPath, []byte(unit), 0644)
+		})
+		if !ok {
+			c.JSON(http.StatusOK, gin.H{"success": false, "msg": logBuf.String()})
+			return
+		}
 
-	step("daemon-reload + enable + restart", func() (string, error) {
-		out1, _ := runCmd("systemctl", "daemon-reload")
-		out2, _ := runCmd("systemctl", "enable", tgBotServiceName)
-		out3, err3 := runCmd("systemctl", "restart", tgBotServiceName)
-		return out1 + out2 + out3, err3
-	})
+		step("daemon-reload + enable + restart", func() (string, error) {
+			out1, _ := runCmd("systemctl", "daemon-reload")
+			out2, _ := runCmd("systemctl", "enable", tgBotServiceName)
+			out3, err3 := runCmd("systemctl", "restart", tgBotServiceName)
+			return out1 + out2 + out3, err3
+		})
+	}
 
 	logBuf.WriteString("✔ Установка завершена.\n")
 	c.JSON(http.StatusOK, gin.H{"success": true, "obj": gin.H{"log": logBuf.String()}})
