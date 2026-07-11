@@ -10,12 +10,19 @@ from handlers import setup_handlers
 from datetime import datetime, timedelta
 from functions import delete_client_by_email
 from database import Session, User, init_db, get_all_users, delete_user_profile
+from create_env import create_config
+import os
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Настройка логирования
 coloredlogs.install(level='info')
 logger = logging.getLogger(__name__)
+
+if os.path.exists(".env"):
+	create_config()
+else:
+	pass
 
 async def check_subscriptions(bot: Bot):
     """Проверка статуса подписок"""
