@@ -19,10 +19,8 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 coloredlogs.install(level='info')
 logger = logging.getLogger(__name__)
 
-if os.path.exists(".env"):
+if not os.path.exists(".env"):
 	create_config()
-else:
-	pass
 
 async def check_subscriptions(bot: Bot):
     """Проверка статуса подписок"""
