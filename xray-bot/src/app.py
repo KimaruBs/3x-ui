@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 
 if not os.path.exists(".env"):
 	create_config()
-
+else:
+	print(".env exists")
+	
 async def check_subscriptions(bot: Bot):
     """Проверка статуса подписок"""
     while True:
